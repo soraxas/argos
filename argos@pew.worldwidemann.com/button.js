@@ -44,6 +44,8 @@ var ArgosButton = new Lang.Class({
 
     this._updateRunning = false;
 
+    this._cachedItems = new Map();
+
     this._update();
 
     if (settings.updateOnOpen) {
@@ -120,16 +122,24 @@ var ArgosButton = new Lang.Class({
 
       let line = Utilities.parseLine(output[i]);
 
-      if (!dropdownMode && line.isSeparator) {
-        dropdownMode = true;
-      } else if (dropdownMode) {
+      if (dropdownMode) {
         dropdownLines.push(line);
+      } else if (line.isSeparator) {
+        dropdownMode = true;
       } else {
         buttonLines.push(line);
       }
     }
 
-    this.menu.removeAll();
+    // destroy all non-cached (no uuid) menu items
+    let _cachedMenuItems = new Set(this._cachedItems.values());
+    for (let _item of this.menu._getMenuItems()) {
+      if (!(_cachedMenuItems.has(_item)))
+        _item.destroy();
+    }
+    
+    // to keep track of cached menuitem that had been reused in this update
+    let _usedCachedMenuItems = new Set(["ARGOS_LAST_SEP", "ARGOS_LAST_MENUITEM"]);
 
     if (this._cycleTimeout !== null) {
       Mainloop.source_remove(this._cycleTimeout);
@@ -146,6 +156,7 @@ var ArgosButton = new Lang.Class({
     } else if (buttonLines.length === 1) {
       this._lineView.setLine(buttonLines[0]);
     } else {
+      // for button lineview that has > 1 lines, loop display them every x seconds
       this._lineView.setLine(buttonLines[0]);
       let i = 0;
       this._cycleTimeout = Mainloop.timeout_add_seconds(3, Lang.bind(this, function() {
@@ -153,15 +164,13 @@ var ArgosButton = new Lang.Class({
         this._lineView.setLine(buttonLines[i % buttonLines.length]);
         return true;
       }));
-
+      // include the lines them in the menu as well for user to view
       for (let j = 0; j < buttonLines.length; j++) {
-        if (buttonLines[j].dropdown !== "false")
+          if (buttonLines[j].dropdown !== "false")
           this.menu.addMenuItem(new ArgosMenuItem(this, buttonLines[j]));
       }
-    }
-
-    if (this.menu.numMenuItems > 0)
       this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+    }
 
     let menus = [];
     menus[0] = this.menu;
@@ -197,21 +206,57 @@ var ArgosButton = new Lang.Class({
         // Skip alternate line
         i++;
       } else {
-        menuItem = new ArgosMenuItem(this, dropdownLines[i]);
+        if (dropdownLines[i].uuid === undefined) {
+          menuItem = new ArgosMenuItem(this, dropdownLines[i]);
+        } else {
+          // static uuid is provided for caching containers
+          _usedCachedMenuItems.add(dropdownLines[i].uuid);
+          if (!this._cachedItems.has(dropdownLines[i].uuid)) {
+            menuItem = new ArgosMenuItem(this, dropdownLines[i]);
+            this._cachedItems.set(dropdownLines[i].uuid, menuItem);
+          } else {
+            // use its previously cached version
+            menuItem = this._cachedItems.get(dropdownLines[i].uuid);
+            menuItem.setLine(dropdownLines[i]);
+            this.menu.moveMenuItem(menuItem, this.menu.numMenuItems);
+            continue;  // do NOT need to add this to the menu
+          }
+        }
       }
 
       menu.addMenuItem(menuItem);
     }
 
-    if (dropdownLines.length > 0)
-      this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+    if (!this._cachedItems.has('ARGOS_LAST_MENUITEM')) {
+      if (dropdownLines.length > 0) {
+        // cache the last seperator
+        let _menu_sep = new PopupMenu.PopupSeparatorMenuItem();
+        this.menu.addMenuItem(_menu_sep);
+        this._cachedItems.set('ARGOS_LAST_SEP', _menu_sep);
+      }
+      
+      // cache the last menu entry, which is an entry for the current filename
+      let menuItem = new PopupMenu.PopupMenuItem(this._file.get_basename(), {
+        style_class: "argos-menu-item-edit"
+      });
+      menuItem.connect("activate", Lang.bind(this, function() {
+        Gio.AppInfo.launch_default_for_uri("file://" + this._file.get_path(), null);
+      }));
+      this.menu.addMenuItem(menuItem);
+      this._cachedItems.set("ARGOS_LAST_MENUITEM", menuItem);
+    } else {
+      // move the cached container to the end of menu
+      if (this._cachedItems.has('ARGOS_LAST_SEP'))
+        this.menu.moveMenuItem(this._cachedItems.get("ARGOS_LAST_SEP"), this.menu.numMenuItems);
+      this.menu.moveMenuItem(this._cachedItems.get("ARGOS_LAST_MENUITEM"), this.menu.numMenuItems);
+    }
 
-    let menuItem = new PopupMenu.PopupMenuItem(this._file.get_basename(), {
-      style_class: "argos-menu-item-edit"
-    });
-    menuItem.connect("activate", Lang.bind(this, function() {
-      Gio.AppInfo.launch_default_for_uri("file://" + this._file.get_path(), null);
-    }));
-    this.menu.addMenuItem(menuItem);
+    // remove every cached entry that is not being use this round.
+    for (const [key, value] of this._cachedItems.entries()) {
+      if (!_usedCachedMenuItems.has(key)) {
+          this._cachedItems.delete(key);
+          value.destroy();
+      }
+    }
   }
 });

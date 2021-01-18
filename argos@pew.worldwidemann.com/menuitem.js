@@ -31,6 +31,7 @@ var ArgosMenuItem = class extends PopupMenu.PopupBaseMenuItem {
     let altSwitcher = null;
 
     let lineView = new ArgosLineView(line);
+    this.lineView = lineView;
 
     if (typeof alternateLine === "undefined") {
       this.actor.add_child(lineView);
@@ -76,6 +77,10 @@ var ArgosMenuItem = class extends PopupMenu.PopupBaseMenuItem {
           button.update();
         }
       }));
+    }
+
+    setLine(line){
+      this.lineView.setLine(line)
     }
   }
 };
